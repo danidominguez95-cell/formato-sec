@@ -81,6 +81,7 @@ function tablasDeMuestras(m, mdia) {
   const tamFijo = v.getUint32(stsz.datos + 4);
   const n = v.getUint32(stsz.datos + 8);
   if (tamFijo === 1) throw new Error("Formato de audio antiguo no compatible");
+  if (n === 0) throw new Error("MP4 fragmentado: sin tablas de muestras");
   const tamanos = new Uint32Array(n);
   for (let i = 0; i < n; i++) tamanos[i] = tamFijo || v.getUint32(stsz.datos + 12 + i * 4);
 
@@ -196,8 +197,68 @@ function escribirM4a(ftyp, t, desde, hasta, datos) {
   return new Blob([ftyp, moov, cabMdat, datos], { type: "audio/mp4" });
 }
 
-// Devuelve una lista de .m4a (Blob) de como máximo `maxBytes` cada uno.
-async function extraerAudioMp4(blob, maxBytes) {
+// Configuración AAC (AudioSpecificConfig) dentro de la caja esds de la descripción de audio.
+function configAac(stsd) {
+  let p = -1;
+  for (let i = 0; i + 4 <= stsd.length; i++) {
+    if (tipoCaja(stsd, i) === "esds") {
+      p = i + 8; // tipo + versión/flags
+      break;
+    }
+  }
+  if (p < 0) throw new Error("Sin configuración AAC");
+  const longitud = () => {
+    let len = 0;
+    for (let k = 0; k < 4; k++) {
+      const byte = stsd[p++];
+      len = (len << 7) | (byte & 0x7f);
+      if (!(byte & 0x80)) break;
+    }
+    return len;
+  };
+  if (stsd[p++] !== 0x03) throw new Error("esds no válido");
+  longitud();
+  p += 2;
+  const flags = stsd[p++];
+  if (flags & 0x80) p += 2;
+  if (flags & 0x40) p += 1 + stsd[p];
+  if (flags & 0x20) p += 2;
+  if (stsd[p++] !== 0x04) throw new Error("esds no válido");
+  longitud();
+  p += 13;
+  if (stsd[p++] !== 0x05) throw new Error("esds no válido");
+  longitud();
+  const aot = stsd[p] >> 3;
+  const frecuencia = ((stsd[p] & 7) << 1) | (stsd[p + 1] >> 7);
+  const canales = (stsd[p + 1] >> 3) & 0xf;
+  if (aot < 1 || aot > 4 || frecuencia > 12 || canales < 1 || canales > 7) throw new Error("AAC no compatible con ADTS");
+  return { aot, frecuencia, canales };
+}
+
+// Flujo AAC con cabecera ADTS por trama (.aac), formato que Gemini acepta directamente.
+function escribirAdts(cfg, t, desde, hasta, datos) {
+  const salida = new Uint8Array(datos.length + 7 * (hasta - desde));
+  let o = 0;
+  let d = 0;
+  for (let i = desde; i < hasta; i++) {
+    const len = t.tamanos[i];
+    const trama = len + 7;
+    salida[o] = 0xff;
+    salida[o + 1] = 0xf1;
+    salida[o + 2] = ((cfg.aot - 1) << 6) | (cfg.frecuencia << 2) | (cfg.canales >> 2);
+    salida[o + 3] = ((cfg.canales & 3) << 6) | (trama >> 11);
+    salida[o + 4] = (trama >> 3) & 0xff;
+    salida[o + 5] = ((trama & 7) << 5) | 0x1f;
+    salida[o + 6] = 0xfc;
+    salida.set(datos.subarray(d, d + len), o + 7);
+    o += trama;
+    d += len;
+  }
+  return new Blob([salida], { type: "audio/aac" });
+}
+
+// Devuelve una lista de audios (Blob) de como máximo `maxBytes` cada uno, en .m4a o en .aac (ADTS).
+async function extraerAudioMp4(blob, maxBytes, formato = "m4a") {
   const cajas = await cajasSuperiores(blob);
   const cMoov = cajas.find((c) => c.tipo === "moov");
   if (!cMoov) throw new Error("No es un MP4/MOV");
@@ -205,6 +266,7 @@ async function extraerAudioMp4(blob, maxBytes) {
   const mdia = pistaDeAudio(m, cajasHijas(m, 0, m.length)[0]);
   if (!mdia) throw new Error("El archivo no tiene audio");
   const t = tablasDeMuestras(m, mdia);
+  const cfg = formato === "adts" ? configAac(t.stsd) : null;
 
   const cFtyp = cajas.find((c) => c.tipo === "ftyp");
   const ftyp = cFtyp
@@ -230,7 +292,7 @@ async function extraerAudioMp4(blob, maxBytes) {
       escrito += fin - t.posiciones[i];
       i = j;
     }
-    partes.push(escribirM4a(ftyp, t, desde, hasta, datos));
+    partes.push(cfg ? escribirAdts(cfg, t, desde, hasta, datos) : escribirM4a(ftyp, t, desde, hasta, datos));
     desde = hasta;
   }
   return partes;

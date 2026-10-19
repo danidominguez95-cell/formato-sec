@@ -34,6 +34,7 @@ const ajustes = () => ({
   gemini: leer("clave-gemini", ""),
   modelo: leer("modelo-gemini", ""),
   vocabulario: leer("vocabulario", VOCABULARIO_INICIAL),
+  motor: leer("motor-transcripcion", "gemini"),
 });
 
 // ---------- Estado ----------
@@ -83,7 +84,7 @@ $("texto-pegado").addEventListener("input", actualizarBotonProcesar);
 
 function comprobarClaves() {
   const a = ajustes();
-  $("aviso-claves").classList.toggle("oculto", !!(a.groq && a.gemini));
+  $("aviso-claves").classList.toggle("oculto", !!(a.gemini && (a.motor !== "groq" || a.groq)));
 }
 
 // ---------- Audio: archivo, grabación y compartido ----------
@@ -355,7 +356,11 @@ function codificarWav(muestras, frecuencia) {
   return new Blob([buf], { type: "audio/wav" });
 }
 
-async function transcribir({ blob, nombre }) {
+async function transcribir(audio) {
+  return ajustes().motor === "groq" ? transcribirConGroq(audio) : transcribirConGemini(audio);
+}
+
+async function transcribirConGroq({ blob, nombre }) {
   const { groq, vocabulario } = ajustes();
   if (blob.size <= MAX_BYTES_GROQ) {
     progreso("Transcribiendo el audio…");
@@ -458,31 +463,17 @@ function configRazonamiento(modelo) {
   return /gemini-2\./.test(modelo) ? { thinkingBudget: 512 } : { thinkingLevel: "low" };
 }
 
-async function formatear(transcripcion, tipo) {
+// Llamada a Gemini con reintentos. `interpretar` convierte el texto de la respuesta en el resultado
+// (si lanza un error, se reintenta). Devuelve lo que devuelva `interpretar`.
+async function llamarGemini(construir, mensaje, interpretar) {
   const { gemini } = ajustes();
   let modelo = await modeloGemini(gemini, false);
-  const peticion = {
-    systemInstruction: { parts: [{ text: PROMPT_SEC }] },
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `Tipo de intervención: ${tipo}\n\nTRANSCRIPCIÓN AUTOMÁTICA:\n${transcripcion}`,
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.3,
-      responseMimeType: "application/json",
-      responseSchema: ESQUEMA_SEC,
-      thinkingConfig: configRazonamiento(modelo),
-    },
-  };
+  let conRazonamiento = true;
 
   for (let intento = 1; ; intento++) {
-    progreso(`Aplicando el Formato SEC (${modelo.replace("models/", "")})…`);
+    const peticion = construir();
+    if (conRazonamiento) peticion.generationConfig.thinkingConfig = configRazonamiento(modelo);
+    progreso(`${mensaje} (${modelo.replace("models/", "")})…`);
     let resp;
     try {
       resp = await fetchGemini(`${API_GEMINI}/${modelo}:generateContent`, {
@@ -504,21 +495,23 @@ async function formatear(transcripcion, tipo) {
         .map((p) => p.text)
         .join("");
       estado.modeloUsado = modelo.replace("models/", "");
-      if (!texto) throw new Error(`Gemini no ha devuelto texto (${(cand && cand.finishReason) || "sin respuesta"}). Prueba a volver a generar.`);
-      try {
-        const json = JSON.parse(texto.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-        return json.apartados || json;
-      } catch {
+      if (!texto) {
         if (intento < 3) continue;
-        throw new Error("La respuesta de Gemini no tenía el formato esperado. Prueba a volver a generar.");
+        throw new Error(`Gemini no ha devuelto texto (${(cand && cand.finishReason) || "sin respuesta"}). Prueba a volver a generar.`);
+      }
+      try {
+        return interpretar(texto);
+      } catch (e) {
+        if (intento < 3) continue;
+        throw e;
       }
     }
 
     if ([400, 401, 403].includes(resp.status)) {
       const detalle = await resp.text().catch(() => "");
-      if (resp.status === 400 && /thinking/i.test(detalle) && peticion.generationConfig.thinkingConfig && intento < 3) {
+      if (resp.status === 400 && /thinking/i.test(detalle) && conRazonamiento && intento < 3) {
         // Este modelo no admite el ajuste de razonamiento: se repite sin él.
-        delete peticion.generationConfig.thinkingConfig;
+        conRazonamiento = false;
         continue;
       }
       if (resp.status === 401 || /API key|API_KEY|PERMISSION/i.test(detalle)) throw new Error("La clave de Gemini no es válida. Revísala en Ajustes.");
@@ -539,6 +532,110 @@ async function formatear(transcripcion, tipo) {
     const detalle = await resp.text().catch(() => "");
     throw new Error(`Error de Gemini (${resp.status}). ${detalle.slice(0, 300)}`);
   }
+}
+
+async function formatear(transcripcion, tipo) {
+  return llamarGemini(
+    () => ({
+      systemInstruction: { parts: [{ text: PROMPT_SEC }] },
+      contents: [{ role: "user", parts: [{ text: `Tipo de intervención: ${tipo}\n\nTRANSCRIPCIÓN:\n${transcripcion}` }] }],
+      generationConfig: { temperature: 0.3, responseMimeType: "application/json", responseSchema: ESQUEMA_SEC },
+    }),
+    "Aplicando el Formato SEC",
+    (texto) => {
+      let json;
+      try {
+        json = JSON.parse(texto.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+      } catch {
+        throw new Error("La respuesta de Gemini no tenía el formato esperado. Prueba a volver a generar.");
+      }
+      return json.apartados || json;
+    }
+  );
+}
+
+// ---------- Transcripción con Gemini (escucha el audio y distingue quién habla) ----------
+
+const MAX_BYTES_GEMINI = 12 * 1024 * 1024; // por petición; en base64 queda por debajo del límite de 20 MB
+const SEGUNDOS_POR_TROZO_GEMINI = 300;
+
+function mimeParaGemini(nombre, tipo) {
+  const ext = (nombre.split(".").pop() || "").toLowerCase();
+  if (ext === "mp3" || tipo.includes("mpeg")) return "audio/mp3";
+  if (ext === "wav" || tipo.includes("wav")) return "audio/wav";
+  if (ext === "ogg" || ext === "opus" || tipo.includes("ogg") || tipo.includes("opus")) return "audio/ogg";
+  if (ext === "flac" || tipo.includes("flac")) return "audio/flac";
+  if (ext === "aac") return "audio/aac";
+  return "";
+}
+
+async function audiosParaGemini({ blob, nombre }) {
+  try {
+    progreso("Extrayendo el audio del archivo…");
+    const partes = await extraerAudioMp4(blob, MAX_BYTES_GEMINI, "adts");
+    return partes.map((b) => ({ blob: b, mime: "audio/aac" }));
+  } catch (e) {
+    if (e.message === "El archivo no tiene audio") throw new Error("Este vídeo no tiene sonido.");
+  }
+  const mime = mimeParaGemini(nombre, blob.type || "");
+  if (mime && blob.size <= MAX_BYTES_GEMINI) return [{ blob, mime }];
+
+  if (blob.size > MAX_BYTES_DECODIFICAR) {
+    throw new Error(`El archivo pesa ${Math.round(blob.size / 1048576)} MB y es demasiado grande para procesarlo en el móvil. Si es un vídeo, envía solo el audio (por ejemplo, una nota de voz o un archivo .m4a).`);
+  }
+  progreso("Preparando el audio…");
+  let muestras;
+  try {
+    muestras = aMono16k(await decodificarAudio(blob));
+  } catch {
+    throw new Error("No se ha podido leer este audio. Prueba con otro formato (.m4a, .mp3, nota de voz).");
+  }
+  const porTrozo = SEGUNDOS_POR_TROZO_GEMINI * 16000;
+  const partes = [];
+  for (let i = 0; i * porTrozo < muestras.length; i++) {
+    partes.push({ blob: codificarWav(muestras.subarray(i * porTrozo, (i + 1) * porTrozo), 16000), mime: "audio/wav" });
+  }
+  return partes;
+}
+
+function aBase64(blob) {
+  return new Promise((ok, mal) => {
+    const lector = new FileReader();
+    lector.onload = () => ok(String(lector.result).split(",")[1] || "");
+    lector.onerror = () => mal(new Error("No se ha podido leer el audio."));
+    lector.readAsDataURL(blob);
+  });
+}
+
+function promptTranscripcion(vocabulario, parte, total) {
+  return `Transcribe este audio en español de forma literal y COMPLETA: no resumas, no omitas ninguna frase y no corrijas el estilo.
+Es una intervención ante los medios de Sira Rego, ministra de Juventud e Infancia del Gobierno de España (voz de mujer).${total > 1 ? ` Es la parte ${parte} de ${total} de la grabación.` : ""}
+- Empieza cada intervención en una línea nueva con la etiqueta de quien habla: "SIRA REGO:" para la ministra, "PERIODISTA:" para quien pregunta y "OTRA PERSONA:" para cualquier otra voz (moderador, traductor, otros cargos).
+- Escribe exactamente lo que se oye. No inventes frases ni añadas fórmulas que nadie dice (por ejemplo, agradecimientos o saludos).
+- Si un fragmento no se entiende, escribe [inaudible]. Si alguien habla en otro idioma, escribe entre corchetes el idioma (por ejemplo, [habla en chino]) sin traducirlo.
+- Ortografía correcta, con tildes. Nombres y términos que pueden aparecer: ${vocabulario}
+Devuelve solo la transcripción.`;
+}
+
+async function transcribirConGemini(audio) {
+  const { vocabulario } = ajustes();
+  const partes = await audiosParaGemini(audio);
+  const textos = [];
+  for (let i = 0; i < partes.length; i++) {
+    const datos = await aBase64(partes[i].blob);
+    const mensaje = partes.length > 1 ? `Transcribiendo parte ${i + 1} de ${partes.length}` : "Transcribiendo el audio";
+    textos.push(
+      await llamarGemini(
+        () => ({
+          contents: [{ role: "user", parts: [{ inlineData: { mimeType: partes[i].mime, data: datos } }, { text: promptTranscripcion(vocabulario, i + 1, partes.length) }] }],
+          generationConfig: { temperature: 0 },
+        }),
+        mensaje,
+        (texto) => texto.trim()
+      )
+    );
+  }
+  return textos.join("\n\n");
 }
 
 // ---------- Montaje del texto para WhatsApp ----------
@@ -574,6 +671,13 @@ function montarTexto(apartados, fechaISO, tipo) {
   return [cabecera, ...bloques].join("\n\n");
 }
 
+// El cuadro de resultado crece con el texto para que se vea entero sin desplazarse dentro de él.
+function ajustarAltura() {
+  const t = $("salida");
+  t.style.height = "auto";
+  t.style.height = t.scrollHeight + 2 + "px";
+}
+
 function revisarLongitudes() {
   const texto = $("salida").value;
   const partes = texto.split(/^\*✅ (.+?)\*\s*$/m);
@@ -591,6 +695,7 @@ function revisarLongitudes() {
 }
 $("salida").addEventListener("input", () => {
   revisarLongitudes();
+  ajustarAltura();
   actualizarHistorial();
 });
 
@@ -604,7 +709,7 @@ function datosIntervencion() {
 async function procesar(soloFormato) {
   ocultarError();
   const a = ajustes();
-  if (!a.gemini || (!soloFormato && estado.modo === "audio" && !a.groq)) {
+  if (!a.gemini || (!soloFormato && estado.modo === "audio" && a.motor === "groq" && !a.groq)) {
     mostrarError("Faltan claves. Añádelas en Ajustes.");
     return;
   }
@@ -638,6 +743,7 @@ async function procesar(soloFormato) {
     $("transcripcion-original").textContent = estado.transcripcion;
     $("resultado").classList.remove("oculto");
     revisarLongitudes();
+    ajustarAltura();
     guardarEnHistorial(fecha, tipo);
     $("resultado").scrollIntoView({ behavior: "smooth" });
   } catch (e) {
@@ -725,6 +831,7 @@ function pintarHistorial() {
       $("transcripcion-original").textContent = e.transcripcion;
       $("resultado").classList.remove("oculto");
       revisarLongitudes();
+      ajustarAltura();
       irA("nueva");
       $("resultado").scrollIntoView();
     });
@@ -739,6 +846,7 @@ function cargarAjustes() {
   $("clave-groq").value = a.groq;
   $("clave-gemini").value = a.gemini;
   $("vocabulario").value = a.vocabulario;
+  $("motor-transcripcion").value = a.motor;
   if (a.modelo) {
     const op = document.createElement("option");
     op.value = op.textContent = a.modelo;
@@ -751,6 +859,7 @@ $("btn-guardar-ajustes").addEventListener("click", () => {
   guardar("clave-groq", $("clave-groq").value.trim());
   guardar("clave-gemini", $("clave-gemini").value.trim());
   guardar("modelo-gemini", $("modelo-gemini").value);
+  guardar("motor-transcripcion", $("motor-transcripcion").value);
   $("estado-ajustes").textContent = "Guardado.";
   comprobarClaves();
 });

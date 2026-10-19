@@ -123,12 +123,22 @@
     <!-- AJUSTES -->
     <section id="vista-ajustes" class="vista">
       <div class="tarjeta">
+        <h2>Transcripción</h2>
+        <label>Servicio para pasar la voz a texto
+          <select id="motor-transcripcion">
+            <option value="gemini">Gemini (recomendado: distingue quién habla)</option>
+            <option value="groq">Groq (más rápido)</option>
+          </select>
+        </label>
+        <p class="nota">Se guarda al pulsar «Guardar» en la tarjeta de claves.</p>
+      </div>
+      <div class="tarjeta">
         <h2>Claves (gratuitas)</h2>
-        <label>Clave de Groq (transcripción)
+        <label>Clave de Groq (solo si usas Groq)
           <input type="password" id="clave-groq" autocomplete="off" placeholder="gsk_…">
         </label>
         <p class="nota">Se consigue en <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a></p>
-        <label>Clave de Google Gemini (formato)
+        <label>Clave de Google Gemini
           <input type="password" id="clave-gemini" autocomplete="off" placeholder="AQ.… o AIza…">
         </label>
         <p class="nota">Se consigue en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></p>
