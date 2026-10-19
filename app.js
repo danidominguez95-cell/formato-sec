@@ -3,6 +3,7 @@
 const NOMBRE_CABECERA = "SIRA REGO";
 const LIMITE_APARTADO = 750;
 const MAX_BYTES_GROQ = 24 * 1024 * 1024; // límite gratuito de Groq: 25 MB por archivo
+const MAX_BYTES_PARTE = 20 * 1024 * 1024;
 const MAX_BYTES_DECODIFICAR = 600 * 1024 * 1024; // más allá, el móvil puede quedarse sin memoria
 const SEGUNDOS_POR_TROZO = 600; // 10 min a 16 kHz mono WAV ≈ 19 MB
 const MAX_HISTORIAL = 30;
@@ -359,6 +360,24 @@ async function transcribir({ blob, nombre }) {
   if (blob.size <= MAX_BYTES_GROQ) {
     progreso("Transcribiendo el audio…");
     return transcribirTrozo(blob, nombreParaGroq(nombre, blob.type || ""), groq, vocabulario);
+  }
+
+  // Vídeos y audios MP4/MOV/M4A: se extrae la pista de audio sin descodificar (rápido y con poca memoria).
+  let partes = null;
+  try {
+    progreso("Extrayendo el audio del archivo…");
+    partes = await extraerAudioMp4(blob, MAX_BYTES_PARTE);
+  } catch (e) {
+    if (e.message === "El archivo no tiene audio") throw new Error("Este vídeo no tiene sonido.");
+    partes = null;
+  }
+  if (partes) {
+    const textos = [];
+    for (let i = 0; i < partes.length; i++) {
+      progreso(partes.length > 1 ? `Transcribiendo parte ${i + 1} de ${partes.length}…` : "Transcribiendo el audio…");
+      textos.push(await transcribirTrozo(partes[i], `parte-${i + 1}.m4a`, groq, vocabulario));
+    }
+    return textos.join("\n");
   }
 
   if (blob.size > MAX_BYTES_DECODIFICAR) {

@@ -125,4 +125,4 @@ a { color: var(--primario); }
 .lista-historial li:first-child { border-top: 0; }
 .lista-historial small { color: var(--suave); display: block; }
 
-.oculto { display: none !important; }
+.oculto, [hidden] { display: none !important; }
