@@ -3,6 +3,7 @@
 const NOMBRE_CABECERA = "SIRA REGO";
 const LIMITE_APARTADO = 750;
 const MAX_BYTES_GROQ = 24 * 1024 * 1024; // límite gratuito de Groq: 25 MB por archivo
+const MAX_BYTES_DECODIFICAR = 600 * 1024 * 1024; // más allá, el móvil puede quedarse sin memoria
 const SEGUNDOS_POR_TROZO = 600; // 10 min a 16 kHz mono WAV ≈ 19 MB
 const MAX_HISTORIAL = 30;
 
@@ -43,6 +44,7 @@ const estado = {
   idActual: null,
   grabador: null,
   wakeLock: null,
+  abortador: null,
 };
 
 // ---------- Navegación ----------
@@ -201,6 +203,41 @@ function ocultarError() {
   $("error").classList.add("oculto");
 }
 
+// Cada petición tiene un tiempo máximo: si un servicio no responde, se avisa en lugar de esperar sin fin.
+function errorDefinitivo(msg) {
+  const e = new Error(msg);
+  e.definitivo = true;
+  return e;
+}
+
+async function fetchConLimite(url, opciones, segundos, servicio) {
+  const ctrl = new AbortController();
+  const reloj = setTimeout(() => ctrl.abort("tiempo"), segundos * 1000);
+  const general = estado.abortador && estado.abortador.signal;
+  const cancelar = () => ctrl.abort("cancelado");
+  if (general) {
+    if (general.aborted) throw errorDefinitivo("Cancelado.");
+    general.addEventListener("abort", cancelar);
+  }
+  try {
+    return await fetch(url, { ...opciones, signal: ctrl.signal });
+  } catch (e) {
+    if (ctrl.signal.aborted && ctrl.signal.reason === "cancelado") throw errorDefinitivo("Cancelado.");
+    if (ctrl.signal.aborted) {
+      throw errorDefinitivo(`${servicio} no ha respondido en ${Math.round(segundos / 60)} minutos. Comprueba la conexión, mantén la app abierta y vuelve a intentarlo.`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(reloj);
+    general && general.removeEventListener("abort", cancelar);
+  }
+}
+
+async function esperarCancelable(ms) {
+  await esperar(ms);
+  if (estado.abortador && estado.abortador.signal.aborted) throw errorDefinitivo("Cancelado.");
+}
+
 // ---------- Transcripción (Groq · Whisper) ----------
 
 function nombreParaGroq(nombre, tipo) {
@@ -208,6 +245,8 @@ function nombreParaGroq(nombre, tipo) {
   const ext = (nombre.split(".").pop() || "").toLowerCase();
   const validas = ["flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"];
   if (validas.includes(ext)) return nombre;
+  // Los vídeos .mov del iPhone usan el mismo contenedor que MP4: Groq los lee si se llaman .mp4.
+  if (ext === "mov" || ext === "qt" || tipo.includes("quicktime")) return "video.mp4";
   if (ext === "opus" || tipo.includes("ogg") || tipo.includes("opus")) return "audio.ogg";
   if (tipo.includes("mp4") || tipo.includes("aac") || ext === "aac") return "audio.m4a";
   if (tipo.includes("webm")) return "audio.webm";
@@ -227,13 +266,14 @@ async function transcribirTrozo(blob, nombre, clave, vocabulario) {
 
     let resp;
     try {
-      resp = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      resp = await fetchConLimite("https://api.groq.com/openai/v1/audio/transcriptions", {
         method: "POST",
         headers: { Authorization: `Bearer ${clave}` },
         body: form,
-      });
-    } catch {
-      if (intento < 3) { await esperar(3000 * intento); continue; }
+      }, 180, "El servicio de transcripción (Groq)");
+    } catch (e) {
+      if (e.definitivo) throw e;
+      if (intento < 3) { await esperarCancelable(3000 * intento); continue; }
       throw new Error("No hay conexión con el servicio de transcripción.");
     }
     if (resp.ok) return (await resp.text()).trim();
@@ -241,7 +281,8 @@ async function transcribirTrozo(blob, nombre, clave, vocabulario) {
     if ((resp.status === 429 || resp.status >= 500) && intento < 4) {
       const espera = Number(resp.headers.get("retry-after")) || 20 * intento;
       progreso(`Límite gratuito de transcripción alcanzado. Reintentando en ${espera} s…`);
-      await esperar(espera * 1000);
+      estado.reintentos++;
+      await esperarCancelable(espera * 1000);
       continue;
     }
     const detalle = await resp.text().catch(() => "");
@@ -320,12 +361,15 @@ async function transcribir({ blob, nombre }) {
     return transcribirTrozo(blob, nombreParaGroq(nombre, blob.type || ""), groq, vocabulario);
   }
 
+  if (blob.size > MAX_BYTES_DECODIFICAR) {
+    throw new Error(`El archivo pesa ${Math.round(blob.size / 1048576)} MB y es demasiado grande para procesarlo en el móvil. Si es un vídeo, envía solo el audio (por ejemplo, una nota de voz o un archivo .m4a).`);
+  }
   progreso("El audio es largo: preparándolo en partes…");
   let muestras;
   try {
     muestras = aMono16k(await decodificarAudio(blob));
   } catch {
-    throw new Error("No se ha podido leer este audio. Prueba a convertirlo a MP3 o M4A, o a recortarlo.");
+    throw new Error("No se ha podido extraer el audio de este archivo. Prueba con un archivo de audio (.m4a, .mp3, nota de voz) en lugar de un vídeo, o recórtalo.");
   }
   const porTrozo = SEGUNDOS_POR_TROZO * 16000;
   const total = Math.ceil(muestras.length / porTrozo);
@@ -344,12 +388,12 @@ const API_GEMINI = "https://generativelanguage.googleapis.com/v1beta";
 
 // Las claves nuevas de AI Studio empiezan por "AQ." y las antiguas por "AIza". Se prueba primero
 // la cabecera de clave de API y, si Google la rechaza, como token Bearer; se recuerda la que funciona.
-async function fetchGemini(url, opciones, clave) {
+async function fetchGemini(url, opciones, clave, segundos = 30) {
   const modos = leer("modo-clave-gemini", "") === "bearer" ? ["bearer", "api-key"] : ["api-key", "bearer"];
   let resp;
   for (const modo of modos) {
     const auth = modo === "bearer" ? { Authorization: `Bearer ${clave}` } : { "x-goog-api-key": clave };
-    resp = await fetch(url, { ...opciones, headers: { ...(opciones.headers || {}), ...auth } });
+    resp = await fetchConLimite(url, { ...opciones, headers: { ...(opciones.headers || {}), ...auth } }, segundos, "Gemini");
     if (resp.status !== 401) {
       guardar("modo-clave-gemini", modo);
       return resp;
@@ -390,6 +434,11 @@ async function modeloGemini(clave, forzarAuto) {
   return nombre;
 }
 
+// Razonamiento reducido: para editar texto no hace falta y en el plan gratuito multiplica la espera.
+function configRazonamiento(modelo) {
+  return /gemini-2\./.test(modelo) ? { thinkingBudget: 512 } : { thinkingLevel: "low" };
+}
+
 async function formatear(transcripcion, tipo) {
   const { gemini } = ajustes();
   let modelo = await modeloGemini(gemini, false);
@@ -409,6 +458,7 @@ async function formatear(transcripcion, tipo) {
       temperature: 0.3,
       responseMimeType: "application/json",
       responseSchema: ESQUEMA_SEC,
+      thinkingConfig: configRazonamiento(modelo),
     },
   };
 
@@ -420,9 +470,10 @@ async function formatear(transcripcion, tipo) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(peticion),
-      }, gemini);
-    } catch {
-      if (intento < 3) { await esperar(3000 * intento); continue; }
+      }, gemini, 300);
+    } catch (e) {
+      if (e.definitivo) throw e;
+      if (intento < 3) { await esperarCancelable(3000 * intento); continue; }
       throw new Error("No hay conexión con Gemini.");
     }
 
@@ -433,6 +484,7 @@ async function formatear(transcripcion, tipo) {
         .filter((p) => !p.thought && p.text)
         .map((p) => p.text)
         .join("");
+      estado.modeloUsado = modelo.replace("models/", "");
       if (!texto) throw new Error(`Gemini no ha devuelto texto (${(cand && cand.finishReason) || "sin respuesta"}). Prueba a volver a generar.`);
       try {
         const json = JSON.parse(texto.replace(/^```(?:json)?\s*|\s*```$/g, ""));
@@ -445,6 +497,11 @@ async function formatear(transcripcion, tipo) {
 
     if ([400, 401, 403].includes(resp.status)) {
       const detalle = await resp.text().catch(() => "");
+      if (resp.status === 400 && /thinking/i.test(detalle) && peticion.generationConfig.thinkingConfig && intento < 3) {
+        // Este modelo no admite el ajuste de razonamiento: se repite sin él.
+        delete peticion.generationConfig.thinkingConfig;
+        continue;
+      }
       if (resp.status === 401 || /API key|API_KEY|PERMISSION/i.test(detalle)) throw new Error("La clave de Gemini no es válida. Revísala en Ajustes.");
       throw new Error(`Error de Gemini (${resp.status}). ${detalle.slice(0, 300)}`);
     }
@@ -456,7 +513,8 @@ async function formatear(transcripcion, tipo) {
     if ((resp.status === 429 || resp.status >= 500) && intento < 4) {
       const espera = 20 * intento;
       progreso(`Gemini está ocupado o se ha alcanzado el límite gratuito. Reintentando en ${espera} s…`);
-      await esperar(espera * 1000);
+      estado.reintentos++;
+      await esperarCancelable(espera * 1000);
       continue;
     }
     const detalle = await resp.text().catch(() => "");
@@ -534,13 +592,29 @@ async function procesar(soloFormato) {
   const { fecha, tipo } = datosIntervencion();
   $("btn-procesar").disabled = true;
   $("btn-regenerar").disabled = true;
+  estado.abortador = new AbortController();
+  const inicio = Date.now();
+  const cronometro = setInterval(() => {
+    const s = Math.floor((Date.now() - inicio) / 1000);
+    $("progreso-tiempo").textContent = `Tiempo: ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }, 1000);
+  $("progreso-tiempo").textContent = "Tiempo: 0:00";
+  estado.reintentos = 0;
+  const seg = (desde) => Math.round((Date.now() - desde) / 1000);
+  const tiempos = [];
   try {
     if (!soloFormato) {
+      const t0 = Date.now();
       estado.transcripcion = estado.modo === "audio" ? await transcribir(estado.audio) : $("texto-pegado").value.trim();
       estado.idActual = null;
+      if (estado.modo === "audio") tiempos.push(`Transcripción: ${seg(t0)} s`);
     }
     if (!estado.transcripcion) throw new Error("La transcripción ha salido vacía. ¿Tiene voz el audio?");
+    const t1 = Date.now();
     const apartados = await formatear(estado.transcripcion, tipo);
+    tiempos.push(`Formato: ${seg(t1)} s (${estado.modeloUsado})`);
+    if (estado.reintentos) tiempos.push(`Reintentos por límite gratuito: ${estado.reintentos}`);
+    $("tiempos").textContent = tiempos.join(" · ");
     $("salida").value = montarTexto(apartados, fecha, tipo);
     $("transcripcion-original").textContent = estado.transcripcion;
     $("resultado").classList.remove("oculto");
@@ -550,6 +624,8 @@ async function procesar(soloFormato) {
   } catch (e) {
     mostrarError(e.message || String(e));
   } finally {
+    clearInterval(cronometro);
+    estado.abortador = null;
     progreso("");
     actualizarBotonProcesar();
     $("btn-regenerar").disabled = false;
@@ -557,6 +633,7 @@ async function procesar(soloFormato) {
 }
 
 $("btn-procesar").addEventListener("click", () => procesar(false));
+$("btn-cancelar").addEventListener("click", () => estado.abortador && estado.abortador.abort());
 $("btn-regenerar").addEventListener("click", () => estado.transcripcion && procesar(true));
 $("btn-ver-transcripcion").addEventListener("click", () => $("transcripcion-original").classList.toggle("oculto"));
 

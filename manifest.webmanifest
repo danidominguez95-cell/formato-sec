@@ -19,7 +19,7 @@
     "enctype": "multipart/form-data",
     "params": {
       "files": [
-        { "name": "audio", "accept": ["audio/*", "video/mp4", ".opus", ".ogg", ".m4a", ".mp3", ".wav", ".aac"] }
+        { "name": "audio", "accept": ["audio/*", "video/mp4", "video/quicktime", ".mov", ".opus", ".ogg", ".m4a", ".mp3", ".wav", ".aac"] }
       ]
     }
   }

@@ -63,7 +63,7 @@
             <button id="btn-grabar" class="btn grande">● Grabar</button>
             <label class="btn grande secundario">
               Elegir archivo
-              <input type="file" id="archivo" accept="audio/*,video/mp4,.opus,.ogg,.m4a,.mp3,.wav,.aac,.mp4,.webm" hidden>
+              <input type="file" id="archivo" accept="audio/*,video/mp4,video/quicktime,.opus,.ogg,.m4a,.mp3,.wav,.aac,.mp4,.mov,.webm" hidden>
             </label>
           </div>
           <div id="grabando" class="grabando oculto">
@@ -87,6 +87,9 @@
       <div id="progreso" class="progreso oculto">
         <div class="spinner"></div>
         <p id="progreso-texto">Procesando…</p>
+        <p id="progreso-tiempo" class="nota"></p>
+        <p class="nota">Mantén la app abierta: si cambias de app o se bloquea el móvil, el proceso puede detenerse.</p>
+        <button id="btn-cancelar" class="btn secundario">Cancelar</button>
       </div>
       <div id="error" class="error oculto"></div>
 
@@ -95,6 +98,7 @@
         <p class="nota">Puedes corregir el texto antes de enviarlo.</p>
         <textarea id="salida" rows="20"></textarea>
         <ul id="avisos-longitud" class="avisos-longitud"></ul>
+        <p id="tiempos" class="nota"></p>
         <div class="acciones">
           <button id="btn-whatsapp" class="btn principal">Enviar por WhatsApp</button>
           <button id="btn-copiar" class="btn secundario">Copiar</button>
