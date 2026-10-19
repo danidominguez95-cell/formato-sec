@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Formato SEC</title>
+  <meta name="description" content="Transcripción de declaraciones en Formato SEC">
+  <meta name="theme-color" content="#0f5132">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Formato SEC">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Formato SEC</h1>
+    <nav>
+      <button class="tab activo" data-vista="nueva">Nueva</button>
+      <button class="tab" data-vista="historial">Historial</button>
+      <button class="tab" data-vista="ajustes">Ajustes</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- NUEVA -->
+    <section id="vista-nueva" class="vista activa">
+      <div id="aviso-claves" class="aviso oculto">
+        Antes de empezar, añade tus claves en <a href="#" data-ir="ajustes">Ajustes</a>.
+      </div>
+
+      <div class="tarjeta">
+        <h2>1. Datos de la intervención</h2>
+        <label>Fecha
+          <input type="date" id="fecha">
+        </label>
+        <label>Tipo de intervención y medio
+          <input type="text" id="tipo" list="tipos" placeholder="RUEDA DE PRENSA CONSEJO DE MINISTROS" autocapitalize="characters">
+          <datalist id="tipos">
+            <option value="RUEDA DE PRENSA CONSEJO DE MINISTROS">
+            <option value="RUEDA DE PRENSA">
+            <option value="ENTREVISTA ">
+            <option value="DECLARACIONES A MEDIOS">
+            <option value="CANUTAZO">
+            <option value="COMPARECENCIA CONGRESO">
+            <option value="COMPARECENCIA SENADO">
+          </datalist>
+        </label>
+      </div>
+
+      <div class="tarjeta">
+        <h2>2. Audio</h2>
+        <div class="selector-modo">
+          <button class="modo activo" data-modo="audio">Audio</button>
+          <button class="modo" data-modo="texto">Pegar texto</button>
+        </div>
+
+        <div id="modo-audio">
+          <div class="botones-audio">
+            <button id="btn-grabar" class="btn grande">● Grabar</button>
+            <label class="btn grande secundario">
+              Elegir archivo
+              <input type="file" id="archivo" accept="audio/*,video/mp4,.opus,.ogg,.m4a,.mp3,.wav,.aac,.mp4,.webm" hidden>
+            </label>
+          </div>
+          <div id="grabando" class="grabando oculto">
+            <span class="punto"></span> Grabando <span id="tiempo">0:00</span>
+            <button id="btn-parar" class="btn peligro">■ Parar</button>
+            <p class="nota">Mantén la pantalla encendida y la app abierta mientras grabas.</p>
+          </div>
+          <div id="audio-listo" class="audio-listo oculto">
+            <span id="audio-nombre"></span>
+            <audio id="audio-preview" controls></audio>
+          </div>
+        </div>
+
+        <div id="modo-texto" class="oculto">
+          <textarea id="texto-pegado" rows="8" placeholder="Pega aquí una transcripción ya hecha"></textarea>
+        </div>
+      </div>
+
+      <button id="btn-procesar" class="btn grande principal" disabled>Generar Formato SEC</button>
+
+      <div id="progreso" class="progreso oculto">
+        <div class="spinner"></div>
+        <p id="progreso-texto">Procesando…</p>
+      </div>
+      <div id="error" class="error oculto"></div>
+
+      <div id="resultado" class="tarjeta oculto">
+        <h2>3. Resultado</h2>
+        <p class="nota">Puedes corregir el texto antes de enviarlo.</p>
+        <textarea id="salida" rows="20"></textarea>
+        <ul id="avisos-longitud" class="avisos-longitud"></ul>
+        <div class="acciones">
+          <button id="btn-whatsapp" class="btn principal">Enviar por WhatsApp</button>
+          <button id="btn-copiar" class="btn secundario">Copiar</button>
+        </div>
+        <div class="acciones">
+          <button id="btn-regenerar" class="btn secundario">Volver a generar</button>
+          <button id="btn-ver-transcripcion" class="btn secundario">Ver transcripción original</button>
+        </div>
+        <pre id="transcripcion-original" class="transcripcion oculto"></pre>
+      </div>
+    </section>
+
+    <!-- HISTORIAL -->
+    <section id="vista-historial" class="vista">
+      <div class="tarjeta">
+        <h2>Historial</h2>
+        <p class="nota">Se guardan las últimas 30 en este móvil.</p>
+        <ul id="lista-historial" class="lista-historial"></ul>
+      </div>
+    </section>
+
+    <!-- AJUSTES -->
+    <section id="vista-ajustes" class="vista">
+      <div class="tarjeta">
+        <h2>Claves (gratuitas)</h2>
+        <label>Clave de Groq (transcripción)
+          <input type="password" id="clave-groq" autocomplete="off" placeholder="gsk_…">
+        </label>
+        <p class="nota">Se consigue en <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a></p>
+        <label>Clave de Google Gemini (formato)
+          <input type="password" id="clave-gemini" autocomplete="off" placeholder="AQ.… o AIza…">
+        </label>
+        <p class="nota">Se consigue en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></p>
+        <label>Modelo de Gemini
+          <select id="modelo-gemini"><option value="">Automático</option></select>
+        </label>
+        <div class="acciones">
+          <button id="btn-guardar-ajustes" class="btn principal">Guardar</button>
+          <button id="btn-probar" class="btn secundario">Probar claves</button>
+        </div>
+        <p id="estado-ajustes" class="nota"></p>
+        <p class="nota">Las claves se guardan solo en este móvil.</p>
+      </div>
+      <div class="tarjeta">
+        <h2>Vocabulario</h2>
+        <p class="nota">Nombres y términos que ayudan a transcribir bien.</p>
+        <textarea id="vocabulario" rows="4"></textarea>
+        <button id="btn-guardar-vocabulario" class="btn secundario">Guardar vocabulario</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="reglas.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

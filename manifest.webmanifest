@@ -1,0 +1,26 @@
+{
+  "name": "Formato SEC",
+  "short_name": "Formato SEC",
+  "description": "Transcripción de declaraciones en Formato SEC",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f5132",
+  "theme_color": "#0f5132",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "share_target": {
+    "action": "./compartir",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        { "name": "audio", "accept": ["audio/*", "video/mp4", ".opus", ".ogg", ".m4a", ".mp3", ".wav", ".aac"] }
+      ]
+    }
+  }
+}
