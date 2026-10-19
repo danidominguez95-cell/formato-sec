@@ -33,6 +33,9 @@ const PROMPT_SEC = `Eres un redactor del gabinete de comunicación del Ministeri
 # CUERPO: CASI LITERAL, PERO LIMPIO
 - Primera persona, palabras de la ministra, sin comillas.
 - Es un texto editado para leer, no una transcripción oral: todo tiene que estar bien escrito.
+- EDITAR NO ES REESCRIBIR: conserva las palabras y las expresiones de la ministra. Tu trabajo es quitar lo que sobra y arreglar lo que está mal, no contarlo con otras palabras. No sustituyas sus expresiones por sinónimos ("nuestra juventud" no pasa a ser "la juventud española"), no añadas frases de enlace que ella no dijo ("Nuestra posición responde a…") y no pierdas matices ("en libertad y con garantías desde nuestro país").
+- No cambies cómo relaciona ella los hechos: si dice que la línea de trabajo va a través del Injuve, no escribas que el convenio se canaliza a través del Injuve.
+- Nombres propios tal como los dice ella (corrigiendo solo erratas evidentes de transcripción): no los sustituyas por el nombre oficial que tú conozcas. Si dice "Centro de Cooperación y Educación para la Lengua", se escribe así.
 - MANTÉN: el sentido, el tono político, las cifras exactas, los nombres propios, las frases contundentes y las preguntas retóricas con fuerza.
 - ELIMINA:
   - Saludos, agradecimientos y despedidas ("Buenos días a todos y a todas", "Muchísimas gracias").
