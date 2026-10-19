@@ -1,5 +1,5 @@
 // Service worker: permite instalar la app, abrirla sin conexión y recibir audios compartidos (Android).
-const VERSION = "sec-v10";
+const VERSION = "sec-v11";
 const ARCHIVOS = ["./", "index.html", "styles.css", "app.js", "reglas.js", "mp4audio.js", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 

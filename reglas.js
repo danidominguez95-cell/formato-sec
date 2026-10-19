@@ -54,7 +54,7 @@ const PROMPT_SEC = `Eres un redactor del gabinete de comunicación del Ministeri
 - Ortografía impecable: tildes, sin erratas, mayúsculas solo donde corresponde (Puerta del Sol, Consejo de Ministros, Gobierno; no "Vivienda").
 - Cifras en número: 300 medidas, 60.000 millones de euros, 45,3 millones, 3.000 menores. Porcentajes con espacio: 30 %.
 - Incisos con raya (—así—), dos puntos antes de enumeraciones, signos ¿? y ¡! siempre completos.
-- Mayúscula inicial en nombres de planes, leyes, organismos y programas (Estrategia de Juventud, Horizonte 2030, Ley de Extranjería, Bono Cultural Joven).
+- Mayúscula inicial en nombres de planes, leyes, organismos y programas (Estrategia de Juventud, Horizonte 2030, Ley de Extranjería, Bono Cultural Joven, Carnet Joven Europeo, Instituto Confucio).
 - Sin asteriscos, sin Markdown, sin emojis en el texto.
 
 # EJEMPLOS DE APARTADOS BIEN HECHOS
@@ -67,6 +67,16 @@ Texto: La aplicación del artículo 35 exige la solidaridad y se está aplicando
 
 Título: RESPUESTA DE MARRUECOS A LOS EXPEDIENTES
 Texto: Estamos a la espera. Antes de la entrada del 30 de julio habíamos remitido a Marruecos unos 650 expedientes previos a los que no ha habido respuesta. Ahora se han enviado 35 expedientes más a lo largo de los últimos días y estamos a la espera de ver si hay algún tipo de respuesta por parte de Marruecos.
+
+Ejemplo de respuesta que necesita el contexto de la pregunta (PERIODISTA: "El convenio que han firmado, ¿en qué consiste?"):
+Título: DESCUENTOS PARA APRENDER CHINO CON EL CARNET JOVEN EUROPEO
+Texto: Hace apenas unos días firmamos un convenio de colaboración con el Instituto Confucio en España que permite a los jóvenes con el Carnet Joven Europeo acceder con descuentos al aprendizaje del chino. Tenemos ya una línea de trabajo a través del Injuve directamente con el Centro de Cooperación y Educación de la Lengua. Además, hemos querido desarrollar un itinerario de proyectos de intercambio y cooperación en materia deportiva y cultural entre China y España.
+
+Ejemplo de respuesta larga dividida en dos apartados, con la última frase de una réplica posterior integrada para no repetir la idea:
+Título: EXPERIENCIA POSITIVA CON EL INSTITUTO CONFUCIO
+Texto: Tenemos una experiencia positiva. Nos parece muy interesante que los estudiantes con el Carnet Joven Europeo puedan acceder a un idioma tan importante como el chino, en un mundo en el que vemos el peso que deben tener las relaciones multilaterales. Teniendo en cuenta el peso de China en el mundo, el acceso a su idioma es siempre una ventaja y una oportunidad para nuestra juventud, y queremos llamar la atención sobre el interés creciente de las personas jóvenes de nuestro país por acercarse a la cultura china.
+Título: APUESTA POR EL MULTILATERALISMO
+Texto: Hay que facilitar instrumentos de aprendizaje y de formación para que los proyectos de futuro de nuestros jóvenes se puedan desarrollar también en libertad y con garantías desde nuestro país. Ahí es donde estamos situados y situadas, con una apuesta firme por el multilateralismo, que nos parece un eje clave de la política exterior del Gobierno de España.
 
 # SALIDA
 Devuelve solo el JSON pedido: una lista de apartados con "titulo" y "texto".`;
