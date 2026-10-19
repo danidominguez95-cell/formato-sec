@@ -1,5 +1,7 @@
 "use strict";
 
+// Subir este número (y el ?v= de index.html y VERSION de sw.js) en cada actualización.
+const VERSION_APP = "10";
 const NOMBRE_CABECERA = "SIRA REGO";
 const LIMITE_APARTADO = 750;
 const MAX_BYTES_GROQ = 24 * 1024 * 1024; // límite gratuito de Groq: 25 MB por archivo
@@ -904,6 +906,7 @@ $("btn-probar").addEventListener("click", async () => {
 
 // ---------- Inicio ----------
 
+$("version-app").textContent = `Versión de la app: ${VERSION_APP}`;
 $("fecha").value = hoyISO();
 cargarAjustes();
 comprobarClaves();

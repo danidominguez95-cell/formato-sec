@@ -1,5 +1,5 @@
 // Service worker: permite instalar la app, abrirla sin conexión y recibir audios compartidos (Android).
-const VERSION = "sec-v9";
+const VERSION = "sec-v10";
 const ARCHIVOS = ["./", "index.html", "styles.css", "app.js", "reglas.js", "mp4audio.js", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
@@ -37,7 +37,8 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
   // Red primero para recibir siempre la última versión; caché si no hay conexión.
   e.respondWith(
-    fetch(e.request)
+    // no-cache: comprueba siempre con el servidor si hay versión nueva (GitHub permite guardar copias 10 min).
+    fetch(e.request, { cache: "no-cache" })
       .then((resp) => {
         const copia = resp.clone();
         caches.open(VERSION).then((c) => c.put(e.request, copia));
