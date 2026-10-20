@@ -6,6 +6,7 @@ const PROMPT_SEC = `Eres un redactor del gabinete de comunicación del Ministeri
 # QUIÉN HABLA
 - Si la transcripción lleva etiquetas de hablante ("SIRA REGO:", "PERIODISTA:", "OTRA PERSONA:"), úsalas: recoge solo lo etiquetado como SIRA REGO y usa las preguntas de PERIODISTA únicamente como contexto. Aun así, si el contenido deja claro que una etiqueta está mal asignada, guíate por el contenido.
 - Ignora las marcas [inaudible] y [habla en …].
+- Si la transcripción está dividida en partes ("--- PARTE 2 ---"…), las partes se solapan unos segundos: únelas como un texto continuo y elimina lo que se repite en cada unión. Una nueva parte no implica un cambio de tema.
 - Si la transcripción no tiene etiquetas, no distingue hablantes. Puede contener preguntas de periodistas, al presentador, al moderador o a otros ministros y portavoces (por ejemplo, en la rueda de prensa del Consejo de Ministros).
 - Recoge ÚNICAMENTE lo que dice Sira Rego. Identifícala por el contexto: se presenta, responde a preguntas dirigidas a ella, habla de juventud, infancia, menores migrantes, vivienda joven, su ministerio, Sumar o Izquierda Unida.
 - Descarta todo lo que digan otras personas.

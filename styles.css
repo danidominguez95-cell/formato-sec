@@ -65,7 +65,7 @@ input, select, textarea {
   padding: 10px 12px;
 }
 textarea { resize: vertical; }
-#salida { font-size: 15px; line-height: 1.5; overflow: hidden; resize: none; }
+#salida, #hist-salida { font-size: 15px; line-height: 1.5; overflow: hidden; resize: none; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -126,3 +126,6 @@ a { color: var(--primario); }
 .lista-historial small { color: var(--suave); display: block; }
 
 .oculto, [hidden] { display: none !important; }
+
+.separado { margin-top: 16px; }
+#btn-hist-eliminar { width: 100%; }

@@ -258,7 +258,9 @@ function escribirAdts(cfg, t, desde, hasta, datos) {
 }
 
 // Devuelve una lista de audios (Blob) de como máximo `maxBytes` cada uno, en .m4a o en .aac (ADTS).
-async function extraerAudioMp4(blob, maxBytes, formato = "m4a") {
+// Con `segundosParte`, además se corta por duración, y cada parte empieza `solape` segundos antes de
+// donde acaba la anterior para no perder palabras en los cortes.
+async function extraerAudioMp4(blob, maxBytes, formato = "m4a", segundosParte = 0, solape = 0) {
   const cajas = await cajasSuperiores(blob);
   const cMoov = cajas.find((c) => c.tipo === "moov");
   if (!cMoov) throw new Error("No es un MP4/MOV");
@@ -273,12 +275,21 @@ async function extraerAudioMp4(blob, maxBytes, formato = "m4a") {
     ? await leerBytes(blob, cFtyp.inicio, cFtyp.fin)
     : caja("ftyp", ascii("qt  "), u32(0), ascii("qt  "));
 
+  const inicioMuestra = new Float64Array(t.n + 1);
+  for (let i = 0; i < t.n; i++) inicioMuestra[i + 1] = inicioMuestra[i] + t.duraciones[i];
+  const maxDuracion = segundosParte ? segundosParte * t.escala : Infinity;
+
   const partes = [];
   let desde = 0;
   while (desde < t.n) {
     let hasta = desde;
     let bytes = 0;
-    while (hasta < t.n && (hasta === desde || bytes + t.tamanos[hasta] <= maxBytes)) bytes += t.tamanos[hasta++];
+    while (
+      hasta < t.n &&
+      (hasta === desde || (bytes + t.tamanos[hasta] <= maxBytes && inicioMuestra[hasta + 1] - inicioMuestra[desde] <= maxDuracion))
+    ) {
+      bytes += t.tamanos[hasta++];
+    }
 
     // Las muestras consecutivas en el archivo se leen de una vez.
     const datos = new Uint8Array(bytes);
@@ -293,7 +304,12 @@ async function extraerAudioMp4(blob, maxBytes, formato = "m4a") {
       i = j;
     }
     partes.push(cfg ? escribirAdts(cfg, t, desde, hasta, datos) : escribirM4a(ftyp, t, desde, hasta, datos));
-    desde = hasta;
+    if (hasta >= t.n) break;
+    // Siguiente parte: retrocede `solape` segundos, sin volver nunca al inicio de esta.
+    let siguiente = hasta;
+    const objetivo = inicioMuestra[hasta] - solape * t.escala;
+    while (siguiente > desde + 1 && inicioMuestra[siguiente - 1] >= objetivo) siguiente--;
+    desde = siguiente;
   }
   return partes;
 }

@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=12">
+  <link rel="stylesheet" href="styles.css?v=13">
 </head>
 <body>
   <header class="topbar">
@@ -96,7 +96,7 @@
       <div id="resultado" class="tarjeta oculto">
         <h2>3. Resultado</h2>
         <p class="nota">Puedes corregir el texto antes de enviarlo.</p>
-        <textarea id="salida" rows="20"></textarea>
+        <textarea id="salida" rows="4"></textarea>
         <ul id="avisos-longitud" class="avisos-longitud"></ul>
         <p id="tiempos" class="nota"></p>
         <div class="acciones">
@@ -108,15 +108,34 @@
           <button id="btn-ver-transcripcion" class="btn secundario">Ver transcripción original</button>
         </div>
         <pre id="transcripcion-original" class="transcripcion oculto"></pre>
+        <button id="btn-nuevo" class="btn grande secundario separado">+ Nuevo trabajo</button>
       </div>
     </section>
 
     <!-- HISTORIAL -->
     <section id="vista-historial" class="vista">
-      <div class="tarjeta">
+      <div id="hist-lista" class="tarjeta">
         <h2>Historial</h2>
         <p class="nota">Se guardan las últimas 30 en este móvil.</p>
         <ul id="lista-historial" class="lista-historial"></ul>
+      </div>
+
+      <div id="hist-detalle" class="tarjeta oculto">
+        <button id="btn-hist-volver" class="btn secundario">← Volver al historial</button>
+        <h2 id="hist-titulo" class="separado"></h2>
+        <p class="nota">Puedes corregir el texto; los cambios se guardan solos.</p>
+        <textarea id="hist-salida" rows="4"></textarea>
+        <ul id="hist-avisos" class="avisos-longitud"></ul>
+        <div class="acciones">
+          <button id="btn-hist-whatsapp" class="btn principal">Enviar por WhatsApp</button>
+          <button id="btn-hist-copiar" class="btn secundario">Copiar</button>
+        </div>
+        <div id="hist-acciones" class="acciones">
+          <button id="btn-hist-regenerar" class="btn secundario">Volver a generar</button>
+          <button id="btn-hist-ver" class="btn secundario">Ver transcripción original</button>
+        </div>
+        <pre id="hist-transcripcion" class="transcripcion oculto"></pre>
+        <button id="btn-hist-eliminar" class="btn peligro separado">Eliminar del historial</button>
       </div>
     </section>
 
@@ -162,8 +181,8 @@
     </section>
   </main>
 
-  <script src="reglas.js?v=12"></script>
-  <script src="mp4audio.js?v=12"></script>
-  <script src="app.js?v=12"></script>
+  <script src="reglas.js?v=13"></script>
+  <script src="mp4audio.js?v=13"></script>
+  <script src="app.js?v=13"></script>
 </body>
 </html>

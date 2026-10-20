@@ -1,7 +1,7 @@
 "use strict";
 
 // Subir este número (y el ?v= de index.html y VERSION de sw.js) en cada actualización.
-const VERSION_APP = "12";
+const VERSION_APP = "13";
 const NOMBRE_CABECERA = "SIRA REGO";
 const LIMITE_APARTADO = 750;
 const MAX_BYTES_GROQ = 24 * 1024 * 1024; // límite gratuito de Groq: 25 MB por archivo
@@ -58,6 +58,7 @@ function irA(vista) {
   document.querySelectorAll(".vista").forEach((v) => v.classList.toggle("activa", v.id === "vista-" + vista));
   if (vista === "historial") pintarHistorial();
   window.scrollTo(0, 0);
+  requestAnimationFrame(ajustarAlturas);
 }
 
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => irA(t.dataset.vista)));
@@ -82,7 +83,10 @@ function actualizarBotonProcesar() {
   const listo = estado.modo === "audio" ? !!estado.audio : $("texto-pegado").value.trim().length > 0;
   $("btn-procesar").disabled = !listo;
 }
-$("texto-pegado").addEventListener("input", actualizarBotonProcesar);
+$("texto-pegado").addEventListener("input", () => {
+  if (!$("resultado").classList.contains("oculto")) limpiarResultado();
+  actualizarBotonProcesar();
+});
 
 function comprobarClaves() {
   const a = ajustes();
@@ -92,6 +96,9 @@ function comprobarClaves() {
 // ---------- Audio: archivo, grabación y compartido ----------
 
 function ponerAudio(blob, nombre) {
+  // Un audio nuevo es un trabajo nuevo: se quita el resultado anterior de la pantalla.
+  limpiarResultado();
+  ocultarError();
   estado.audio = { blob, nombre };
   $("audio-nombre").textContent = `${nombre} · ${(blob.size / 1024 / 1024).toFixed(1)} MB`;
   $("audio-preview").src = URL.createObjectURL(blob);
@@ -436,7 +443,7 @@ async function listarModelos(clave) {
   return (datos.models || []).filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"));
 }
 
-function elegirModelo(modelos) {
+function ordenarModelos(modelos) {
   const excluir = /(lite|image|tts|live|audio|embedding|vision|learnlm|gemma|robotics|computer|exp)/;
   const version = (n) => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || "0");
   const candidatos = modelos
@@ -447,17 +454,48 @@ function elegirModelo(modelos) {
       const estableB = b.includes("preview") ? 0 : 1;
       return estableB - estableA || version(b) - version(a);
     });
-  return candidatos[0] || "models/gemini-flash-latest";
+  return candidatos;
+}
+
+function elegirModelo(modelos) {
+  return ordenarModelos(modelos)[0] || "models/gemini-flash-latest";
+}
+
+// Modelos Flash disponibles, del preferido al menos preferido (se consulta una vez por semana).
+async function candidatosGemini(clave, forzar) {
+  const cache = leer("modelos-auto", null);
+  if (cache && !forzar && Date.now() - cache.fecha < 7 * 86400000 && cache.lista.length) return cache.lista;
+  const lista = ordenarModelos(await listarModelos(clave));
+  if (!lista.length) lista.push("models/gemini-flash-latest");
+  guardar("modelos-auto", { lista, fecha: Date.now() });
+  return lista;
 }
 
 async function modeloGemini(clave, forzarAuto) {
   const elegido = ajustes().modelo;
   if (elegido && !forzarAuto) return elegido;
-  const cache = leer("modelo-auto", null);
-  if (cache && !forzarAuto && Date.now() - cache.fecha < 7 * 86400000) return cache.nombre;
-  const nombre = elegirModelo(await listarModelos(clave));
-  guardar("modelo-auto", { nombre, fecha: Date.now() });
-  return nombre;
+  return (await candidatosGemini(clave, forzarAuto))[0];
+}
+
+async function otroModelo(clave, probados) {
+  try {
+    return (await candidatosGemini(clave, false)).find((m) => !probados.includes(m)) || null;
+  } catch {
+    return null;
+  }
+}
+
+// Segundos que Google pide esperar antes de reintentar (viene en la respuesta de error), o null.
+function esperaSugerida(detalle) {
+  let segundos = null;
+  try {
+    const info = (JSON.parse(detalle).error.details || []).find((d) => d.retryDelay);
+    if (info) segundos = parseFloat(info.retryDelay);
+  } catch {
+    const m = /retry in ([\d.]+)\s*s/i.exec(detalle);
+    if (m) segundos = parseFloat(m[1]);
+  }
+  return segundos === null || isNaN(segundos) ? null : Math.min(60, Math.max(2, Math.ceil(segundos) + 1));
 }
 
 // Razonamiento reducido: para editar texto no hace falta y en el plan gratuito multiplica la espera.
@@ -470,12 +508,14 @@ function configRazonamiento(modelo) {
 async function llamarGemini(construir, mensaje, interpretar) {
   const { gemini } = ajustes();
   let modelo = await modeloGemini(gemini, false);
+  const probados = [modelo];
   let conRazonamiento = true;
+  let saturaciones = 0;
 
   for (let intento = 1; ; intento++) {
     const peticion = construir();
     if (conRazonamiento) peticion.generationConfig.thinkingConfig = configRazonamiento(modelo);
-    progreso(`${mensaje} (${modelo.replace("models/", "")})…`);
+    if (mensaje) progreso(`${mensaje} (${modelo.replace("models/", "")})…`);
     let resp;
     try {
       resp = await fetchGemini(`${API_GEMINI}/${modelo}:generateContent`, {
@@ -496,7 +536,7 @@ async function llamarGemini(construir, mensaje, interpretar) {
         .filter((p) => !p.thought && p.text)
         .map((p) => p.text)
         .join("");
-      estado.modeloUsado = modelo.replace("models/", "");
+      estado.modelosUsados && estado.modelosUsados.add(modelo.replace("models/", ""));
       if (!texto) {
         if (intento < 3) continue;
         throw new Error(`Gemini no ha devuelto texto (${(cand && cand.finishReason) || "sin respuesta"}). Prueba a volver a generar.`);
@@ -522,12 +562,30 @@ async function llamarGemini(construir, mensaje, interpretar) {
     if (resp.status === 404 && intento < 3) {
       // El modelo guardado ya no existe: se busca otro automáticamente.
       modelo = await modeloGemini(gemini, true);
+      probados.push(modelo);
       continue;
     }
-    if ((resp.status === 429 || resp.status >= 500) && intento < 4) {
-      const espera = 20 * intento;
-      progreso(`Gemini está ocupado o se ha alcanzado el límite gratuito. Reintentando en ${espera} s…`);
+    if (resp.status === 429 || resp.status >= 500) {
+      // Saturación o límite gratuito: se espera lo que indique Google y, si se repite, se cambia de modelo
+      // (cada modelo tiene su propio límite gratuito).
+      const detalle = await resp.text().catch(() => "");
+      saturaciones++;
       estado.reintentos++;
+      const agotadoHoy = /PerDay|per day/i.test(detalle);
+      if (agotadoHoy || saturaciones >= 2) {
+        const alternativo = await otroModelo(gemini, probados);
+        if (alternativo) {
+          modelo = alternativo;
+          probados.push(alternativo);
+          saturaciones = 0;
+          progreso(`Gemini está saturado: probando con otro modelo (${alternativo.replace("models/", "")})…`);
+          continue;
+        }
+        if (agotadoHoy) throw new Error("Se ha agotado el límite gratuito diario de Gemini. Vuelve a intentarlo mañana o cambia a Groq en Ajustes.");
+      }
+      if (intento >= 6) throw new Error(`Gemini sigue saturado (${resp.status}). Espera un par de minutos y vuelve a intentarlo.`);
+      const espera = esperaSugerida(detalle) || (resp.status === 429 ? 10 : 3 * saturaciones);
+      progreso(`Gemini está saturado o se ha alcanzado el límite gratuito. Reintentando en ${espera} s…`);
       await esperarCancelable(espera * 1000);
       continue;
     }
@@ -559,7 +617,10 @@ async function formatear(transcripcion, tipo) {
 // ---------- Transcripción con Gemini (escucha el audio y distingue quién habla) ----------
 
 const MAX_BYTES_GEMINI = 12 * 1024 * 1024; // por petición; en base64 queda por debajo del límite de 20 MB
-const SEGUNDOS_POR_TROZO_GEMINI = 300;
+const SEGUNDOS_POR_TROZO_GEMINI = 120; // trozos cortos que se transcriben a la vez
+const SOLAPE_GEMINI = 3; // segundos repetidos entre trozos para no cortar palabras
+const PARTES_A_LA_VEZ = 3;
+const MAX_BYTES_SIN_TROCEAR = 1.5 * 1024 * 1024; // audios cortos (1-2 min) se envían enteros
 
 function mimeParaGemini(nombre, tipo) {
   const ext = (nombre.split(".").pop() || "").toLowerCase();
@@ -574,13 +635,13 @@ function mimeParaGemini(nombre, tipo) {
 async function audiosParaGemini({ blob, nombre }) {
   try {
     progreso("Extrayendo el audio del archivo…");
-    const partes = await extraerAudioMp4(blob, MAX_BYTES_GEMINI, "adts");
+    const partes = await extraerAudioMp4(blob, MAX_BYTES_GEMINI, "adts", SEGUNDOS_POR_TROZO_GEMINI, SOLAPE_GEMINI);
     return partes.map((b) => ({ blob: b, mime: "audio/aac" }));
   } catch (e) {
     if (e.message === "El archivo no tiene audio") throw new Error("Este vídeo no tiene sonido.");
   }
   const mime = mimeParaGemini(nombre, blob.type || "");
-  if (mime && blob.size <= MAX_BYTES_GEMINI) return [{ blob, mime }];
+  if (mime && blob.size <= MAX_BYTES_SIN_TROCEAR) return [{ blob, mime }];
 
   if (blob.size > MAX_BYTES_DECODIFICAR) {
     throw new Error(`El archivo pesa ${Math.round(blob.size / 1048576)} MB y es demasiado grande para procesarlo en el móvil. Si es un vídeo, envía solo el audio (por ejemplo, una nota de voz o un archivo .m4a).`);
@@ -590,12 +651,16 @@ async function audiosParaGemini({ blob, nombre }) {
   try {
     muestras = aMono16k(await decodificarAudio(blob));
   } catch {
+    // Sin poder trocearlo, se envía entero si Gemini admite el formato.
+    if (mime && blob.size <= MAX_BYTES_GEMINI) return [{ blob, mime }];
     throw new Error("No se ha podido leer este audio. Prueba con otro formato (.m4a, .mp3, nota de voz).");
   }
   const porTrozo = SEGUNDOS_POR_TROZO_GEMINI * 16000;
+  const paso = (SEGUNDOS_POR_TROZO_GEMINI - SOLAPE_GEMINI) * 16000;
   const partes = [];
-  for (let i = 0; i * porTrozo < muestras.length; i++) {
-    partes.push({ blob: codificarWav(muestras.subarray(i * porTrozo, (i + 1) * porTrozo), 16000), mime: "audio/wav" });
+  for (let inicio = 0; ; inicio += paso) {
+    partes.push({ blob: codificarWav(muestras.subarray(inicio, inicio + porTrozo), 16000), mime: "audio/wav" });
+    if (inicio + porTrozo >= muestras.length) break;
   }
   return partes;
 }
@@ -611,7 +676,7 @@ function aBase64(blob) {
 
 function promptTranscripcion(vocabulario, parte, total) {
   return `Transcribe este audio en español de forma literal y COMPLETA: no resumas, no omitas ninguna frase y no corrijas el estilo.
-Es una intervención ante los medios de Sira Rego, ministra de Juventud e Infancia del Gobierno de España (voz de mujer).${total > 1 ? ` Es la parte ${parte} de ${total} de la grabación.` : ""}
+Es una intervención ante los medios de Sira Rego, ministra de Juventud e Infancia del Gobierno de España (voz de mujer).${total > 1 ? ` Es la parte ${parte} de ${total} de la grabación: puede empezar o terminar a mitad de una frase; transcribe también esos fragmentos tal como se oyen.` : ""}
 - Empieza cada intervención en una línea nueva con la etiqueta de quien habla: "SIRA REGO:" para la ministra, "PERIODISTA:" para quien pregunta y "OTRA PERSONA:" para cualquier otra voz (moderador, traductor, otros cargos).
 - Escribe exactamente lo que se oye. No inventes frases ni añadas fórmulas que nadie dice (por ejemplo, agradecimientos o saludos).
 - Si un fragmento no se entiende, escribe [inaudible]. Si alguien habla en otro idioma, escribe entre corchetes el idioma (por ejemplo, [habla en chino]) sin traducirlo.
@@ -622,22 +687,37 @@ Devuelve solo la transcripción.`;
 async function transcribirConGemini(audio) {
   const { vocabulario } = ajustes();
   const partes = await audiosParaGemini(audio);
-  const textos = [];
-  for (let i = 0; i < partes.length; i++) {
-    const datos = await aBase64(partes[i].blob);
-    const mensaje = partes.length > 1 ? `Transcribiendo parte ${i + 1} de ${partes.length}` : "Transcribiendo el audio";
-    textos.push(
-      await llamarGemini(
-        () => ({
-          contents: [{ role: "user", parts: [{ inlineData: { mimeType: partes[i].mime, data: datos } }, { text: promptTranscripcion(vocabulario, i + 1, partes.length) }] }],
-          generationConfig: { temperature: 0 },
-        }),
-        mensaje,
-        (texto) => texto.trim()
-      )
-    );
-  }
-  return textos.join("\n\n");
+  const textos = new Array(partes.length);
+  let listas = 0;
+  const aviso = () =>
+    progreso(partes.length > 1 ? `Transcribiendo el audio: ${listas} de ${partes.length} partes listas…` : "Transcribiendo el audio…");
+  aviso();
+
+  // Varias partes a la vez; si una falla, se cancelan las demás.
+  let siguiente = 0;
+  const trabajador = async () => {
+    while (siguiente < partes.length) {
+      const i = siguiente++;
+      try {
+        const datos = await aBase64(partes[i].blob);
+        textos[i] = await llamarGemini(
+          () => ({
+            contents: [{ role: "user", parts: [{ inlineData: { mimeType: partes[i].mime, data: datos } }, { text: promptTranscripcion(vocabulario, i + 1, partes.length) }] }],
+            generationConfig: { temperature: 0 },
+          }),
+          null,
+          (texto) => texto.trim()
+        );
+      } catch (e) {
+        estado.abortador && estado.abortador.abort();
+        throw e;
+      }
+      listas++;
+      aviso();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(PARTES_A_LA_VEZ, partes.length) }, trabajador));
+  return textos.map((t, i) => (i ? `--- PARTE ${i + 1} ---\n${t}` : t)).join("\n\n");
 }
 
 // ---------- Montaje del texto para WhatsApp ----------
@@ -674,109 +754,59 @@ function montarTexto(apartados, fechaISO, tipo) {
 }
 
 // El cuadro de resultado crece con el texto para que se vea entero sin desplazarse dentro de él.
-function ajustarAltura() {
-  const t = $("salida");
+// Solo se puede medir cuando está visible.
+function ajustarAltura(t) {
+  if (!t.offsetParent) return;
   t.style.height = "auto";
   t.style.height = t.scrollHeight + 2 + "px";
 }
 
-function revisarLongitudes() {
-  const texto = $("salida").value;
+function ajustarAlturas() {
+  ajustarAltura($("salida"));
+  ajustarAltura($("hist-salida"));
+}
+window.addEventListener("resize", ajustarAlturas);
+
+function revisarLongitudes(texto, ul) {
   const partes = texto.split(/^\*✅ (.+?)\*\s*$/m);
-  const avisos = [];
+  ul.innerHTML = "";
   for (let i = 1; i < partes.length; i += 2) {
     const largo = partes[i + 1].trim().length;
-    if (largo > LIMITE_APARTADO) avisos.push(`«${partes[i]}»: ${largo} caracteres (máx. ${LIMITE_APARTADO})`);
-  }
-  $("avisos-longitud").innerHTML = "";
-  avisos.forEach((a) => {
-    const li = document.createElement("li");
-    li.textContent = a;
-    $("avisos-longitud").appendChild(li);
-  });
-}
-$("salida").addEventListener("input", () => {
-  revisarLongitudes();
-  ajustarAltura();
-  actualizarHistorial();
-});
-
-// ---------- Proceso principal ----------
-
-function datosIntervencion() {
-  const tipo = ($("tipo").value || "").trim().replace(/\s+/g, " ").toLocaleUpperCase("es-ES") || "DECLARACIONES";
-  return { fecha: $("fecha").value || hoyISO(), tipo };
-}
-
-async function procesar(soloFormato) {
-  ocultarError();
-  const a = ajustes();
-  if (!a.gemini || (!soloFormato && estado.modo === "audio" && a.motor === "groq" && !a.groq)) {
-    mostrarError("Faltan claves. Añádelas en Ajustes.");
-    return;
-  }
-  const { fecha, tipo } = datosIntervencion();
-  $("btn-procesar").disabled = true;
-  $("btn-regenerar").disabled = true;
-  estado.abortador = new AbortController();
-  const inicio = Date.now();
-  const cronometro = setInterval(() => {
-    const s = Math.floor((Date.now() - inicio) / 1000);
-    $("progreso-tiempo").textContent = `Tiempo: ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-  }, 1000);
-  $("progreso-tiempo").textContent = "Tiempo: 0:00";
-  estado.reintentos = 0;
-  const seg = (desde) => Math.round((Date.now() - desde) / 1000);
-  const tiempos = [];
-  try {
-    if (!soloFormato) {
-      const t0 = Date.now();
-      estado.transcripcion = estado.modo === "audio" ? await transcribir(estado.audio) : $("texto-pegado").value.trim();
-      estado.idActual = null;
-      if (estado.modo === "audio") tiempos.push(`Transcripción: ${seg(t0)} s`);
+    if (largo > LIMITE_APARTADO) {
+      const li = document.createElement("li");
+      li.textContent = `«${partes[i]}»: ${largo} caracteres (máx. ${LIMITE_APARTADO})`;
+      ul.appendChild(li);
     }
-    if (!estado.transcripcion) throw new Error("La transcripción ha salido vacía. ¿Tiene voz el audio?");
-    const t1 = Date.now();
-    const apartados = await formatear(estado.transcripcion, tipo);
-    tiempos.push(`Formato: ${seg(t1)} s (${estado.modeloUsado})`);
-    if (estado.reintentos) tiempos.push(`Reintentos por límite gratuito: ${estado.reintentos}`);
-    $("tiempos").textContent = tiempos.join(" · ");
-    $("salida").value = montarTexto(apartados, fecha, tipo);
-    $("transcripcion-original").textContent = estado.transcripcion;
-    $("resultado").classList.remove("oculto");
-    revisarLongitudes();
-    ajustarAltura();
-    guardarEnHistorial(fecha, tipo);
-    $("resultado").scrollIntoView({ behavior: "smooth" });
-  } catch (e) {
-    mostrarError(e.message || String(e));
-  } finally {
-    clearInterval(cronometro);
-    estado.abortador = null;
-    progreso("");
-    actualizarBotonProcesar();
-    $("btn-regenerar").disabled = false;
   }
 }
 
-$("btn-procesar").addEventListener("click", () => procesar(false));
-$("btn-cancelar").addEventListener("click", () => estado.abortador && estado.abortador.abort());
-$("btn-regenerar").addEventListener("click", () => estado.transcripcion && procesar(true));
-$("btn-ver-transcripcion").addEventListener("click", () => $("transcripcion-original").classList.toggle("oculto"));
+function pintarResultado() {
+  revisarLongitudes($("salida").value, $("avisos-longitud"));
+  ajustarAltura($("salida"));
+}
 
-$("btn-copiar").addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText($("salida").value);
-  } catch {
-    $("salida").select();
-    document.execCommand("copy");
-  }
-  $("btn-copiar").textContent = "¡Copiado!";
-  setTimeout(() => ($("btn-copiar").textContent = "Copiar"), 1500);
+$("salida").addEventListener("input", () => {
+  pintarResultado();
+  actualizarEntrada(estado.idActual, $("salida").value);
 });
 
-$("btn-whatsapp").addEventListener("click", async () => {
-  const texto = $("salida").value;
+async function copiarTexto(texto, boton) {
+  try {
+    await navigator.clipboard.writeText(texto);
+  } catch {
+    const t = document.createElement("textarea");
+    t.value = texto;
+    document.body.appendChild(t);
+    t.select();
+    document.execCommand("copy");
+    t.remove();
+  }
+  const original = boton.textContent;
+  boton.textContent = "¡Copiado!";
+  setTimeout(() => (boton.textContent = original), 1500);
+}
+
+async function compartirTexto(texto) {
   if (navigator.share) {
     try {
       await navigator.share({ text: texto });
@@ -786,33 +816,149 @@ $("btn-whatsapp").addEventListener("click", async () => {
     }
   }
   window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, "_blank");
-});
+}
+
+// ---------- Proceso principal ----------
+
+function datosIntervencion() {
+  const tipo = ($("tipo").value || "").trim().replace(/\s+/g, " ").toLocaleUpperCase("es-ES") || "DECLARACIONES";
+  return { fecha: $("fecha").value || hoyISO(), tipo };
+}
+
+// Borra el resultado de la pestaña Nueva (al cargar otro audio o empezar un trabajo nuevo).
+function limpiarResultado() {
+  estado.transcripcion = "";
+  estado.idActual = null;
+  $("salida").value = "";
+  $("tiempos").textContent = "";
+  $("avisos-longitud").innerHTML = "";
+  $("transcripcion-original").textContent = "";
+  $("transcripcion-original").classList.add("oculto");
+  $("resultado").classList.add("oculto");
+}
+
+function nuevoTrabajo() {
+  limpiarResultado();
+  ocultarError();
+  estado.audio = null;
+  const previa = $("audio-preview");
+  if (previa.src) URL.revokeObjectURL(previa.src);
+  previa.removeAttribute("src");
+  $("audio-listo").classList.add("oculto");
+  $("texto-pegado").value = "";
+  $("fecha").value = hoyISO();
+  $("tipo").value = "";
+  actualizarBotonProcesar();
+  window.scrollTo(0, 0);
+}
+$("btn-nuevo").addEventListener("click", nuevoTrabajo);
+
+// Coloca el indicador de progreso y el cuadro de error debajo de `referencia`, en la vista que se esté usando.
+function ubicarAvisos(referencia) {
+  referencia.after($("progreso"));
+  $("progreso").after($("error"));
+  ocultarError();
+}
+
+async function ejecutarProceso(botones, tarea) {
+  botones.forEach((b) => (b.disabled = true));
+  estado.abortador = new AbortController();
+  estado.reintentos = 0;
+  estado.modelosUsados = new Set();
+  const inicio = Date.now();
+  const cronometro = setInterval(() => {
+    const s = Math.floor((Date.now() - inicio) / 1000);
+    $("progreso-tiempo").textContent = `Tiempo: ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }, 1000);
+  $("progreso-tiempo").textContent = "Tiempo: 0:00";
+  try {
+    await tarea();
+  } catch (e) {
+    mostrarError(e.message || String(e));
+  } finally {
+    clearInterval(cronometro);
+    estado.abortador = null;
+    progreso("");
+    botones.forEach((b) => (b.disabled = false));
+    actualizarBotonProcesar();
+  }
+}
+
+function resumenTiempos(tiempos) {
+  if (estado.modelosUsados.size) tiempos.push(`Modelo: ${[...estado.modelosUsados].join(", ")}`);
+  if (estado.reintentos) tiempos.push(`Reintentos por límite gratuito: ${estado.reintentos}`);
+  return tiempos.join(" · ");
+}
+
+async function procesar(soloFormato) {
+  ubicarAvisos($("btn-procesar"));
+  const a = ajustes();
+  if (!a.gemini || (!soloFormato && estado.modo === "audio" && a.motor === "groq" && !a.groq)) {
+    mostrarError("Faltan claves. Añádelas en Ajustes.");
+    return;
+  }
+  const { fecha, tipo } = datosIntervencion();
+  const seg = (desde) => Math.round((Date.now() - desde) / 1000);
+  await ejecutarProceso([$("btn-procesar"), $("btn-regenerar"), $("btn-nuevo")], async () => {
+    const tiempos = [];
+    if (!soloFormato) {
+      const t0 = Date.now();
+      estado.transcripcion = estado.modo === "audio" ? await transcribir(estado.audio) : $("texto-pegado").value.trim();
+      estado.idActual = null;
+      if (estado.modo === "audio") tiempos.push(`Transcripción: ${seg(t0)} s`);
+    }
+    if (!estado.transcripcion) throw new Error("La transcripción ha salido vacía. ¿Tiene voz el audio?");
+    const t1 = Date.now();
+    const apartados = await formatear(estado.transcripcion, tipo);
+    tiempos.push(`Formato: ${seg(t1)} s`);
+    $("tiempos").textContent = resumenTiempos(tiempos);
+    $("salida").value = montarTexto(apartados, fecha, tipo);
+    $("transcripcion-original").textContent = estado.transcripcion;
+    $("resultado").classList.remove("oculto");
+    pintarResultado();
+    estado.idActual = guardarEntrada({ id: estado.idActual, fecha, tipo, texto: $("salida").value, transcripcion: estado.transcripcion });
+    $("resultado").scrollIntoView({ behavior: "smooth" });
+  });
+}
+
+$("btn-procesar").addEventListener("click", () => procesar(false));
+$("btn-cancelar").addEventListener("click", () => estado.abortador && estado.abortador.abort());
+$("btn-regenerar").addEventListener("click", () => estado.transcripcion && procesar(true));
+$("btn-ver-transcripcion").addEventListener("click", () => $("transcripcion-original").classList.toggle("oculto"));
+$("btn-copiar").addEventListener("click", () => copiarTexto($("salida").value, $("btn-copiar")));
+$("btn-whatsapp").addEventListener("click", () => compartirTexto($("salida").value));
 
 // ---------- Historial ----------
 
-function guardarEnHistorial(fecha, tipo) {
-  const lista = leer("historial", []);
-  const id = estado.idActual || Date.now();
-  estado.idActual = id;
-  const entrada = { id, fecha, tipo, texto: $("salida").value, transcripcion: estado.transcripcion };
-  const resto = lista.filter((x) => x.id !== id);
-  guardar("historial", [entrada, ...resto].slice(0, MAX_HISTORIAL));
+const leerHistorial = () => leer("historial", []);
+
+// Guarda (o sustituye) una entrada y devuelve su id.
+function guardarEntrada(entrada) {
+  const id = entrada.id || Date.now();
+  const resto = leerHistorial().filter((x) => x.id !== id);
+  guardar("historial", [{ ...entrada, id }, ...resto].slice(0, MAX_HISTORIAL));
+  return id;
 }
 
-function actualizarHistorial() {
-  if (!estado.idActual) return;
-  const lista = leer("historial", []);
-  const e = lista.find((x) => x.id === estado.idActual);
+function actualizarEntrada(id, texto) {
+  if (!id) return;
+  const lista = leerHistorial();
+  const e = lista.find((x) => x.id === id);
   if (e) {
-    e.texto = $("salida").value;
+    e.texto = texto;
     guardar("historial", lista);
   }
 }
 
+let idDetalle = null;
+
 function pintarHistorial() {
+  idDetalle = null;
+  $("hist-detalle").classList.add("oculto");
+  $("hist-lista").classList.remove("oculto");
   const ul = $("lista-historial");
   ul.innerHTML = "";
-  const lista = leer("historial", []);
+  const lista = leerHistorial();
   if (!lista.length) {
     ul.innerHTML = "<li>Todavía no hay transcripciones.</li>";
     return;
@@ -824,22 +970,69 @@ function pintarHistorial() {
     const sub = document.createElement("small");
     sub.textContent = (e.texto.split("\n").find((l) => l.startsWith("*✅")) || "").replace(/\*/g, "");
     li.append(titulo, sub);
-    li.addEventListener("click", () => {
-      estado.idActual = e.id;
-      estado.transcripcion = e.transcripcion;
-      $("fecha").value = e.fecha;
-      $("tipo").value = e.tipo;
-      $("salida").value = e.texto;
-      $("transcripcion-original").textContent = e.transcripcion;
-      $("resultado").classList.remove("oculto");
-      revisarLongitudes();
-      ajustarAltura();
-      irA("nueva");
-      $("resultado").scrollIntoView();
-    });
+    li.addEventListener("click", () => abrirDetalle(e.id));
     ul.appendChild(li);
   });
 }
+
+function pintarDetalle() {
+  revisarLongitudes($("hist-salida").value, $("hist-avisos"));
+  ajustarAltura($("hist-salida"));
+}
+
+function abrirDetalle(id) {
+  const e = leerHistorial().find((x) => x.id === id);
+  if (!e) return pintarHistorial();
+  idDetalle = id;
+  $("hist-lista").classList.add("oculto");
+  $("hist-detalle").classList.remove("oculto");
+  $("hist-titulo").textContent = `${fechaCabecera(e.fecha)} - ${e.tipo}`;
+  $("hist-salida").value = e.texto;
+  $("hist-transcripcion").textContent = e.transcripcion || "(No hay transcripción guardada.)";
+  $("hist-transcripcion").classList.add("oculto");
+  $("btn-hist-regenerar").disabled = !e.transcripcion;
+  ocultarError();
+  window.scrollTo(0, 0);
+  pintarDetalle();
+}
+
+$("hist-salida").addEventListener("input", () => {
+  pintarDetalle();
+  actualizarEntrada(idDetalle, $("hist-salida").value);
+});
+$("btn-hist-volver").addEventListener("click", () => {
+  pintarHistorial();
+  window.scrollTo(0, 0);
+});
+$("btn-hist-copiar").addEventListener("click", () => copiarTexto($("hist-salida").value, $("btn-hist-copiar")));
+$("btn-hist-whatsapp").addEventListener("click", () => compartirTexto($("hist-salida").value));
+$("btn-hist-ver").addEventListener("click", () => $("hist-transcripcion").classList.toggle("oculto"));
+
+$("btn-hist-regenerar").addEventListener("click", async () => {
+  const id = idDetalle;
+  const e = leerHistorial().find((x) => x.id === id);
+  if (!e || !e.transcripcion) return;
+  ubicarAvisos($("hist-acciones"));
+  if (!ajustes().gemini) {
+    mostrarError("Falta la clave de Gemini. Añádela en Ajustes.");
+    return;
+  }
+  await ejecutarProceso([$("btn-hist-regenerar"), $("btn-hist-eliminar"), $("btn-hist-volver")], async () => {
+    const texto = montarTexto(await formatear(e.transcripcion, e.tipo), e.fecha, e.tipo);
+    actualizarEntrada(id, texto);
+    if (idDetalle === id) {
+      $("hist-salida").value = texto;
+      pintarDetalle();
+    }
+  });
+});
+
+$("btn-hist-eliminar").addEventListener("click", () => {
+  if (!idDetalle || !confirm("¿Eliminar este trabajo del historial?")) return;
+  guardar("historial", leerHistorial().filter((x) => x.id !== idDetalle));
+  if (estado.idActual === idDetalle) estado.idActual = null;
+  pintarHistorial();
+});
 
 // ---------- Ajustes ----------
 
